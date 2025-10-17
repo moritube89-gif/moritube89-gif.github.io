@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <title>BIGcampus</title>
+  <style>
+    body { text-align: center; background: #111; color: white; font-family: sans-serif; }
+    canvas { border: 1px solid #555; cursor: crosshair; background: white; width: 1000px; height: 1000px; }
+    #notice { color: #f33; font-weight: bold; }
+    #adminBtn { margin-top: 10px; padding: 5px 10px; }
+  </style>
+</head>
+<body>
+  <h1>BIGcampus</h1>
+  <p>1日30ピクセルまで塗れます</p>
+  <canvas id="board" width="2000" height="2000"></canvas>
+  <p id="notice"></p>
+  <button id="adminBtn" style="display:none;">キャンバスリセット</button>
+
+  <!-- Firebase SDK モジュール版 -->
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/12.4.0/firebase-app.js";
+    import { getDatabase, ref, set, onValue, remove } from "https://www.gstatic.com/firebasejs/12.4.0/firebase-database.js";
+
+    // Firebase 設定
+    const firebaseConfig = {
+      apiKey: "AIzaSyCBXwKICBIhBIAUV8AjrJ4HnBNGrYJPYG0",
+      authDomain: "bigcampus-bd0d4.firebaseapp.com",
+      databaseURL: "https://bigcampus-bd0d4-default-rtdb.asia-southeast1.firebasedatabase.app",
+      projectId: "bigcampus-bd0d4",
+      storageBucket: "bigcampus-bd0d4.appspot.com",
+      messagingSenderId: "1090931295547",
+      appId: "1:1090931295547:web:a0ba5cf8c2bdf5e1b4e31e"
+    };
+
+    const app = initializeApp(firebaseConfig);
+    const db = getDatabase(app);
+
+    const allowedUsers = [
+      "ユーザー000001","ユーザー000002","ユーザー000003","ユーザー000004",
+      "ユーザー000005","ユーザー000006","ユーザー000007","ユーザー000008",
+      "ユーザー000009","ユーザー0000010"
+    ];
+
+    const canvas = document.getElementById('board');
+    const ctx = canvas.getContext('2d');
+    const notice = document.getElementById('notice');
+    const adminBtn = document.getElementById('adminBtn');
+
+    // ニックネーム確認
+    let nickname = localStorage.getItem('nickname');
+    if (!nickname) {
+      nickname = prompt("あなたのニックネームを入力してください（例：ユーザー000001）");
+      localStorage.setItem('nickname', nickname);
+    }
+
+    if (!allowedUsers.includes(nickname)) {
+      notice.textContent = "⚠ このニックネームでは参加できません。管理者に確認してください。";
+      canvas.style.pointerEvents = "none";
+    }
+
+    // 管理者ボタン表示
+    if (nickname === "ユーザー000001") adminBtn.style.display = "inline-block";
+
+    // 1日30ピクセル制限
+    const today = new Date().toDateString();
+    const usedKey = `used-${today}-${nickname}`;
+    let used = Number(localStorage.getItem(usedKey) || 0);
+
+    // ピクセル塗り
+    canvas.addEventListener('click', e => {
+      if (!allowedUsers.includes(nickname)) return;
+      if (used >= 30) { alert("今日はもう30ピクセル塗りました！"); return; }
+
+      const rect = canvas.getBoundingClientRect();
+      const scaleX = canvas.width / rect.width;
+      const scaleY = canvas.height / rect.height;
+      const x = Math.floor((e.clientX - rect.left) * scaleX);
+      const y = Math.floor((e.clientY - rect.top) * scaleY);
+      const color = "#" + Math.floor(Math.random() * 16777215).toString(16);
+
+      set(ref(db, `pixels/${x}_${y}`), { x, y, color, by: nickname });
+      used++;
+      localStorage.setItem(usedKey, used);
+    });
+
+    // リアルタイム描画
+    onValue(ref(db, 'pixels'), snapshot => {
+      const data = snapshot.val();
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      if (!data) return;
+      for (const key in data) {
+        const p = data[key];
+        ctx.fillStyle = p.color;
+        ctx.fillRect(p.x, p.y, 1, 1);
+      }
+    });
+
+    // 管理者リセット
+    adminBtn.addEventListener('click', () => {
+      const pw = prompt("パスワードを入力してください");
+      if (pw === "キャンパス") {
+        if (confirm("本当にキャンバスをリセットしますか？")) {
+          remove(ref(db, 'pixels'));
+          alert("キャンバスをリセットしました！");
+        }
+      } else alert("パスワードが違います");
+    });
+  </script>
+</body>
+</html>

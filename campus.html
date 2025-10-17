@@ -1,0 +1,527 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>MORISUTO Pixel Canvas — Single file</title>
+<style>
+  :root{--bg:#071018;--panel:#0b1220;--accent:#2b90ff;--muted:#9aa6b2}
+  *{box-sizing:border-box}
+  html,body{height:100%;margin:0;font-family:system-ui, -apple-system, "Segoe UI", Roboto, "Hiragino Kaku Gothic ProN", Meiryo, Arial;background:linear-gradient(180deg,#071422 0%, #071018 100%);color:#e6eef6}
+  #app{display:flex;flex-direction:column;height:100%}
+  header{display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border-bottom:1px solid rgba(255,255,255,0.03)}
+  main{display:flex;flex:1;gap:12px;padding:12px}
+  #controls{width:320px;min-width:240px;background:rgba(255,255,255,0.02);padding:12px;border-radius:12px}
+  label{display:block;color:var(--muted);font-size:13px;margin-bottom:6px}
+  input[type="text"]{width:100%;padding:8px;border-radius:8px;border:1px solid #233; background:#061018;color:#fff}
+  button{background:var(--accent);border:0;color:white;padding:8px 10px;border-radius:8px;cursor:pointer}
+  #canvasWrap{flex:1;display:flex;flex-direction:column;align-items:center}
+  #canvasControls{display:flex;gap:8px;align-items:center;margin-bottom:8px}
+  #pixelCanvas{background:#000;border-radius:8px;box-shadow:0 8px 30px rgba(2,6,23,0.6);max-width:100%;height:auto;display:block}
+  .small{font-size:12px;color:var(--muted)}
+  #loginModal{position:fixed;inset:0;background:rgba(0,0,0,0.8);display:flex;align-items:center;justify-content:center;z-index:60}
+  #loginBox{background:#071018;padding:20px;border-radius:12px;width:360px;box-shadow:0 10px 30px rgba(0,0,0,0.6)}
+  .row{display:flex;gap:8px;align-items:center}
+  .info{margin-top:10px;color:var(--muted);font-size:13px}
+  .beacon{position:absolute;width:18px;height:18px;border-radius:50%;border:2px solid #fff;display:flex;align-items:center;justify-content:center;font-size:12px}
+  #adminReset{background:#ff5555}
+  footer{padding:8px 16px;border-top:1px solid rgba(255,255,255,0.03);font-size:13px}
+  @media (max-width:800px){main{flex-direction:column}#controls{width:100%}}
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <h1 style="margin:0;font-size:18px">MORISUTO Pixel Canvas</h1>
+    <div class="small">キャンバス: 2000×2000 • 1日30ピクセル</div>
+  </header>
+
+  <main>
+    <aside id="controls">
+      <div>
+        <label>ニックネーム</label>
+        <div id="nickDisplay" style="margin-bottom:8px"></div>
+        <div id="loginHint" class="small" style="display:none;margin-bottom:10px;color:var(--muted)"></div>
+      </div>
+
+      <div style="margin-top:6px">
+        <label>色を選ぶ</label>
+        <input id="colorInput" type="color" value="#ff0000">
+      </div>
+
+      <div style="margin-top:12px">
+        <label>操作</label>
+        <div class="row" style="margin-bottom:8px">
+          <button id="placeBtn">配置モード（クリックで1ピクセル配置）</button>
+          <button id="beaconBtn">ビーコン設置/移動</button>
+        </div>
+        <div class="small">シフト＋クリックでその場所に即配置（ドラッグで移動は不可）</div>
+      </div>
+
+      <div style="margin-top:12px">
+        <label>残り</label>
+        <div class="small">今日の残りピクセル: <strong id="remaining">0</strong> / 30</div>
+      </div>
+
+      <div style="margin-top:12px">
+        <label>表示 / 移動</label>
+        <div class="row">
+          <button id="zoomIn">＋</button>
+          <button id="zoomOut">－</button>
+          <div id="zoomLabel" class="small" style="min-width:80px;text-align:center">100%</div>
+        </div>
+        <div class="small" style="margin-top:8px">キャンバスはドラッグで移動。ホイールでズーム。</div>
+      </div>
+
+      <div style="margin-top:12px">
+        <label>管理</label>
+        <div class="row">
+          <button id="adminReset" style="display:none">キャンバス初期化（管理者のみ）</button>
+        </div>
+        <div class="small" style="margin-top:6px">※ 初期化はこのブラウザ上のデータを全て削除します（他の端末のデータは消えません）</div>
+      </div>
+
+    </aside>
+
+    <section id="canvasWrap">
+      <div id="canvasControls">
+        <div class="small">表示領域は最大1000×1000まで（ズームアウト制限）</div>
+      </div>
+      <div style="position:relative;width:100%;height:calc(100vh - 180px);">
+        <canvas id="pixelCanvas" width="1000" height="800"></canvas>
+        <!-- beacon element for owner (positioned absolutely) -->
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <small>パスワード: <code>MORISUTO</code>（使いません — ローカル保存版）</small>
+  </footer>
+</div>
+
+<!-- Login modal (no placeholder text as requested) -->
+<div id="loginModal">
+  <div id="loginBox">
+    <h3 style="margin-top:0">参加する</h3>
+    <div class="small">許可されるニックネームは次の10人のみ。厳密にこの表記で入力してください。</div>
+    <ul class="small" style="margin-top:8px">
+      <li>ユーザー000001</li><li>ユーザー000002</li><li>ユーザー000003</li><li>ユーザー000004</li><li>ユーザー000005</li>
+      <li>ユーザー000006</li><li>ユーザー000007</li><li>ユーザー000008</li><li>ユーザー000009</li><li>ユーザー000010</li>
+    </ul>
+
+    <div style="margin-top:12px">
+      <input id="nickInput" type="text" maxlength="20" />
+    </div>
+    <div style="margin-top:10px" class="row">
+      <button id="enterBtn">参加</button>
+      <button id="clearLocalBtn" style="background:#666">この端末のデータを削除</button>
+    </div>
+    <div id="loginMsg" class="info"></div>
+  </div>
+</div>
+
+<script>
+/*
+  MORISUTO Canvas — All-in-one front-end (localStorage-based)
+
+  - World: 2000 x 2000 pixels (sparse: only stored pixels are kept)
+  - Per-day limit: 30 placements per nickname (local to this browser)
+  - No delete button — simply overwrite by placing another color
+  - Allowed nicknames: only the 10 specified (exact match)
+  - Each nickname can be "registered" once per browser (we store registered list per-browser).
+  - Beacons: each user can set one beacon (visible only to that user)
+  - Admin reset button is shown only when logged in as ユーザー000001
+  - All data stored in localStorage under keys:
+      - morisuto_pixels  -> array of {x,y,color}
+      - morisuto_beacons -> object { nickname: {x,y} }
+      - morisuto_usage   -> object { nickname: {date:string, placed:number} }
+      - morisuto_registered -> array of nicknames used in this browser
+*/
+
+(() => {
+  // --- Config ---
+  const WORLD_W = 2000, WORLD_H = 2000;
+  const MAX_DAILY = 30;
+  const ALLOWED_NICKS = [
+    "ユーザー000001","ユーザー000002","ユーザー000003","ユーザー000004","ユーザー000005",
+    "ユーザー000006","ユーザー000007","ユーザー000008","ユーザー000009","ユーザー000010"
+  ];
+
+  // localStorage keys
+  const KEY_PIXELS = 'morisuto_pixels';
+  const KEY_BEACONS = 'morisuto_beacons';
+  const KEY_USAGE  = 'morisuto_usage';
+  const KEY_NICK   = 'morisuto_nick';
+  const KEY_REGISTERED = 'morisuto_registered';
+
+  // UI
+  const loginModal = document.getElementById('loginModal');
+  const nickInput = document.getElementById('nickInput');
+  const enterBtn = document.getElementById('enterBtn');
+  const loginMsg = document.getElementById('loginMsg');
+  const clearLocalBtn = document.getElementById('clearLocalBtn');
+
+  const nickDisplay = document.getElementById('nickDisplay');
+  const loginHint = document.getElementById('loginHint');
+  const colorInput = document.getElementById('colorInput');
+  const remainingEl = document.getElementById('remaining');
+  const adminResetBtn = document.getElementById('adminReset');
+  const beaconBtn = document.getElementById('beaconBtn');
+  const placeBtn = document.getElementById('placeBtn');
+  const zoomInBtn = document.getElementById('zoomIn');
+  const zoomOutBtn = document.getElementById('zoomOut');
+  const zoomLabel = document.getElementById('zoomLabel');
+
+  const canvas = document.getElementById('pixelCanvas');
+  const ctx = canvas.getContext('2d');
+
+  // Canvas UI state
+  let canvasWidth, canvasHeight;
+  function resizeCanvasToFill(){
+    const rect = canvas.getBoundingClientRect();
+    // set physical canvas size for pixel-perfect rendering (use devicePixelRatio)
+    canvasWidth = Math.max(600, canvas.parentElement.clientWidth - 20);
+    canvasHeight = Math.max(400, window.innerHeight - 220);
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = canvasWidth * dpr;
+    canvas.height = canvasHeight * dpr;
+    canvas.style.width = canvasWidth + 'px';
+    canvas.style.height = canvasHeight + 'px';
+    ctx.setTransform(dpr,0,0,dpr,0,0);
+    render();
+  }
+  window.addEventListener('resize', resizeCanvasToFill);
+
+  // World rendering params
+  const BASE_PIXEL_SIZE = 6; // visual pixel size when zoom = 1
+  // zoom controls: we will compute zoom such that:
+  // viewportWorldWidth = canvasWidth / (BASE_PIXEL_SIZE * zoom)
+  // constrain viewportWorldWidth <= 1000 (max visible)
+  let zoom = 1;
+  let offsetX = 0, offsetY = 0; // in screen pixels (world->screen: screen = world * step - offset)
+  function step(){
+    return BASE_PIXEL_SIZE * zoom;
+  }
+
+  // compute zoom limits depending on canvas size
+  function computeZoomLimits(){
+    // min zoom so that viewportWorldWidth <= 1000
+    const minZoom = Math.min(1, canvasWidth / (BASE_PIXEL_SIZE * 1000));
+    // max zoom so that 1 world pixel fills the screen (i.e., viewportWorldWidth = 1)
+    const maxZoom = canvasWidth / (BASE_PIXEL_SIZE * 1);
+    return { minZoom, maxZoom };
+  }
+
+  // Pan / drag
+  let isPanning=false, panStart=null;
+  canvas.addEventListener('mousedown', (e) => {
+    if (e.button === 2) { // right-click to pan
+      isPanning = true; panStart = {x:e.clientX, y:e.clientY}; canvas.style.cursor='grabbing'; return;
+    }
+    handleCanvasClick(e);
+  });
+  window.addEventListener('mousemove', (e) => {
+    if(isPanning && panStart){
+      const dx = e.clientX - panStart.x;
+      const dy = e.clientY - panStart.y;
+      panStart = {x:e.clientX, y:e.clientY};
+      offsetX -= dx;
+      offsetY -= dy;
+      render();
+    }
+  });
+  window.addEventListener('mouseup', ()=>{ isPanning=false; panStart=null; canvas.style.cursor='default'; });
+
+  // wheel zoom (ctrl+wheel or plain wheel)
+  canvas.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    const {minZoom, maxZoom} = computeZoomLimits();
+    // zoom toward pointer position
+    const rect = canvas.getBoundingClientRect();
+    const mx = e.clientX - rect.left;
+    const my = e.clientY - rect.top;
+    const beforeWorldX = (mx + offsetX) / step();
+    const beforeWorldY = (my + offsetY) / step();
+    if (e.deltaY < 0) zoom *= 1.15; else zoom /= 1.15;
+    zoom = Math.max(minZoom, Math.min(maxZoom, zoom));
+    // adjust offset so that the point under cursor stays under cursor
+    offsetX = beforeWorldX * step() - mx;
+    offsetY = beforeWorldY * step() - my;
+    updateZoomLabel();
+    render();
+  }, { passive:false });
+
+  // zoom buttons
+  zoomInBtn.addEventListener('click', ()=>{ const {maxZoom} = computeZoomLimits(); zoom = Math.min(maxZoom, zoom * 1.25); updateZoomLabel(); render(); });
+  zoomOutBtn.addEventListener('click', ()=>{ const {minZoom} = computeZoomLimits(); zoom = Math.max(minZoom, zoom / 1.25); updateZoomLabel(); render(); });
+
+  function updateZoomLabel(){ zoomLabel.textContent = Math.round(zoom*100) + '%' }
+
+  // world data helpers (sparse)
+  function loadJSON(key, fallback){
+    try { const v = localStorage.getItem(key); return v ? JSON.parse(v) : fallback; } catch(e){ return fallback; }
+  }
+  function saveJSON(key, obj){
+    try { localStorage.setItem(key, JSON.stringify(obj)); } catch(e){ console.error('save failed', e); }
+  }
+
+  // Data in memory
+  // pixelsMap: key "x:y" -> color
+  let pixelsMap = new Map();
+  let beacons = {}; // nickname -> {x,y}
+  let usage = {};   // nickname -> {date:'YYYY-MM-DD', placed: number}
+  let registered = []; // nicknames registered in this browser
+  let currentNick = null;
+
+  // load from storage
+  function loadAll(){
+    const pixelsArr = loadJSON(KEY_PIXELS, []);
+    pixelsMap = new Map(pixelsArr.map(p=>[`${p.x}:${p.y}`, p.color]));
+    beacons = loadJSON(KEY_BEACONS, {});
+    usage = loadJSON(KEY_USAGE, {});
+    registered = loadJSON(KEY_REGISTERED, []);
+    currentNick = localStorage.getItem(KEY_NICK) || null;
+  }
+
+  // persist
+  function saveAll(){
+    const arr = Array.from(pixelsMap.entries()).map(([k,color]) => {
+      const [x,y] = k.split(':').map(Number);
+      return {x,y,color};
+    });
+    saveJSON(KEY_PIXELS, arr);
+    saveJSON(KEY_BEACONS, beacons);
+    saveJSON(KEY_USAGE, usage);
+    saveJSON(KEY_REGISTERED, registered);
+    if (currentNick) localStorage.setItem(KEY_NICK, currentNick);
+    else localStorage.removeItem(KEY_NICK);
+  }
+
+  // daily usage helpers
+  function todayKey(){ return new Date().toISOString().slice(0,10); }
+  function ensureUsage(nick){
+    if(!usage[nick] || usage[nick].date !== todayKey()){
+      usage[nick] = { date: todayKey(), placed: 0 };
+    }
+  }
+
+  // render
+  function render(){
+    if(!canvas) return;
+    ctx.clearRect(0,0,canvas.width, canvas.height);
+    // background grid optional (very faint)
+    const stepPx = step();
+    const viewW = canvasWidth, viewH = canvasHeight;
+    // fill with dark
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0,0,viewW,viewH);
+
+    // render pixels
+    for(const [k,color] of pixelsMap.entries()){
+      const [wx, wy] = k.split(':').map(Number);
+      const sx = (wx * stepPx) - offsetX;
+      const sy = (wy * stepPx) - offsetY;
+      // culling
+      if (sx + stepPx < 0 || sy + stepPx < 0 || sx > viewW || sy > viewH) continue;
+      ctx.fillStyle = color;
+      ctx.fillRect(Math.floor(sx)+0.25, Math.floor(sy)+0.25, Math.ceil(stepPx)-0.5, Math.ceil(stepPx)-0.5);
+    }
+
+    // draw beacon for this user (if exists)
+    if(currentNick && beacons[currentNick]){
+      const b = beacons[currentNick];
+      const sx = (b.x * stepPx) - offsetX;
+      const sy = (b.y * stepPx) - offsetY;
+      if (sx >= -20 && sy >= -20 && sx <= viewW+20 && sy <= viewH+20){
+        // draw beacon circle with border
+        ctx.beginPath();
+        ctx.arc(sx + stepPx/2, sy + stepPx/2, Math.max(6, stepPx/2), 0, Math.PI*2);
+        ctx.fillStyle = 'rgba(255, 255, 0, 0.85)';
+        ctx.fill();
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = '#fff';
+        ctx.stroke();
+        // small label
+        ctx.fillStyle = '#000';
+        ctx.font = (Math.max(10, stepPx*0.4)) + 'px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('B', sx + stepPx/2, sy + stepPx/2);
+      }
+    }
+
+    updateRemainingUI();
+  }
+
+  function updateRemainingUI(){
+    if(!currentNick) { remainingEl.textContent = '0'; return; }
+    ensureUsage(currentNick);
+    remainingEl.textContent = Math.max(0, MAX_DAILY - usage[currentNick].placed);
+    // show admin button only for ユーザー000001
+    adminResetBtn.style.display = (currentNick === 'ユーザー000001') ? 'inline-block' : 'none';
+    nickDisplay.textContent = currentNick;
+    loginHint.style.display = 'block';
+    loginHint.textContent = '登録済み: ' + (registered.includes(currentNick) ? 'はい' : 'いいえ');
+  }
+
+  // convert screen coords to world pixel coords
+  function screenToWorld(sx, sy){
+    const wx = Math.floor( (sx + offsetX) / step() );
+    const wy = Math.floor( (sy + offsetY) / step() );
+    // clamp to world
+    return { x: Math.max(0, Math.min(WORLD_W-1, wx)), y: Math.max(0, Math.min(WORLD_H-1, wy)) };
+  }
+
+  // place pixel (overwrites existing)
+  function placeAtWorld(x, y, color){
+    if(!currentNick) { alert('先に参加してください'); return; }
+    ensureUsage(currentNick);
+    if (usage[currentNick].placed >= MAX_DAILY) { alert('今日の配置上限に達しました'); return; }
+    const key = `${x}:${y}`;
+    pixelsMap.set(key, color);
+    usage[currentNick].placed += 1;
+    saveAll();
+    render();
+  }
+
+  // canvas click handler
+  let placeMode = true; // true: place pixel, false: set/move beacon
+  placeBtn.addEventListener('click', ()=>{ placeMode = true; placeBtn.style.opacity = 1; beaconBtn.style.opacity = 0.7; });
+  beaconBtn.addEventListener('click', ()=>{ placeMode = false; beaconBtn.style.opacity = 1; placeBtn.style.opacity = 0.7; });
+
+  function handleCanvasClick(e){
+    if(!currentNick) return;
+    const rect = canvas.getBoundingClientRect();
+    const sx = e.clientX - rect.left;
+    const sy = e.clientY - rect.top;
+    const w = screenToWorld(sx, sy);
+    if(placeMode){
+      placeAtWorld(w.x, w.y, colorInput.value);
+    }else{
+      // set beacon for this user (one beacon per user)
+      beacons[currentNick] = { x: w.x, y: w.y };
+      saveAll();
+      render();
+      // center view to beacon
+      centerToWorld(w.x, w.y);
+    }
+  }
+
+  // shift+click quick place (anywhere)
+  canvas.addEventListener('click', (e) => {
+    // click handler already covers normal clicks, but we want to allow shift to always place
+    if(e.shiftKey && currentNick){
+      const rect = canvas.getBoundingClientRect();
+      const sx = e.clientX - rect.left;
+      const sy = e.clientY - rect.top;
+      const w = screenToWorld(sx, sy);
+      placeAtWorld(w.x, w.y, colorInput.value);
+    }
+  });
+
+  // center camera to world coordinates
+  function centerToWorld(wx, wy){
+    const s = step();
+    const rect = canvas.getBoundingClientRect();
+    const mx = rect.width / 2;
+    const my = rect.height / 2;
+    offsetX = wx * s - mx + s/2;
+    offsetY = wy * s - my + s/2;
+    render();
+  }
+
+  // admin reset (clears all storage in this browser)
+  adminResetBtn.addEventListener('click', ()=>{
+    if(currentNick !== 'ユーザー000001') return;
+    if(!confirm('このブラウザ上のキャンバス、ビーコン、使用情報をすべて初期化しますか？（他の端末のデータは削除されません）')) return;
+    pixelsMap.clear();
+    beacons = {};
+    usage = {};
+    registered = [];
+    currentNick = null;
+    localStorage.removeItem(KEY_PIXELS);
+    localStorage.removeItem(KEY_BEACONS);
+    localStorage.removeItem(KEY_USAGE);
+    localStorage.removeItem(KEY_REGISTERED);
+    localStorage.removeItem(KEY_NICK);
+    // show login
+    showLogin();
+    render();
+  });
+
+  // login flow
+  function showLogin(){
+    loginModal.style.display = 'flex';
+    nickInput.value = '';
+    nickInput.focus();
+  }
+
+  function hideLogin(){
+    loginModal.style.display = 'none';
+  }
+
+  enterBtn.addEventListener('click', () => {
+    const name = nickInput.value.trim();
+    if(!ALLOWED_NICKS.includes(name)){
+      loginMsg.textContent = 'このニックネームは許可されていません。上のリストと完全一致させてください。';
+      return;
+    }
+    // check registration in this browser
+    if(!registered.includes(name)){
+      // allow and register
+      registered.push(name);
+      saveJSON(KEY_REGISTERED, registered);
+    } else {
+      // already registered in this browser: allow reuse (the user had registered earlier)
+      // if you want to block re-login in same browser -> change behavior
+    }
+    currentNick = name;
+    localStorage.setItem(KEY_NICK, currentNick);
+    ensureUsage(currentNick);
+    saveAll();
+    hideLogin();
+    updateRemainingUI();
+    render();
+  });
+
+  clearLocalBtn.addEventListener('click', ()=>{
+    if(!confirm('この端末の全データ（キャンバス、ビーコン、使用情報）を削除しますか？ 他の端末のデータは消えません。')) return;
+    localStorage.removeItem(KEY_PIXELS);
+    localStorage.removeItem(KEY_BEACONS);
+    localStorage.removeItem(KEY_USAGE);
+    localStorage.removeItem(KEY_REGISTERED);
+    localStorage.removeItem(KEY_NICK);
+    // reload to clean state
+    location.reload();
+  });
+
+  // initial load
+  loadAll();
+  // if user already logged in in this browser, auto-login
+  if(currentNick && ALLOWED_NICKS.includes(currentNick)){
+    hideLogin();
+    updateRemainingUI();
+  } else {
+    showLogin();
+  }
+  // setup canvas sizing
+  resizeCanvasToFill();
+  updateZoomLabel();
+  // ensure UI states
+  placeBtn.style.opacity = 1; beaconBtn.style.opacity = 0.7;
+
+  // helper to save on unload
+  window.addEventListener('beforeunload', () => { saveAll(); });
+
+  // expose a debug helper (optional)
+  window.__morisuto_debug = {
+    pixelsMap, beacons, usage, saveAll, loadAll
+  };
+
+  // initial render tick after resize
+  setTimeout(()=>{ render(); }, 100);
+
+})();
+</script>
+</body>
+</html>

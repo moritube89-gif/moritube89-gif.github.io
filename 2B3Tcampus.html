@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Pixel World 2b2t風</title>
+<style>
+body {margin:0; background:#222; font-family:sans-serif; overflow:hidden;}
+#ui {
+  position:fixed; top:10px; left:10px;
+  background:rgba(0,0,0,0.6); padding:10px; border-radius:12px;
+  color:white; z-index:30;
+}
+#canvas {cursor:crosshair; touch-action:none; display:block; background:#8b8b8b;}
+button,input[type=color]{margin:5px; padding:5px; border-radius:5px; border:none; cursor:pointer;}
+#minimap {
+  position:fixed; bottom:10px; right:10px; width:150px; height:150px;
+  border:2px solid cyan; background:#000; z-index:30;
+}
+</style>
+</head>
+<body>
+
+<div id="ui">
+  <div id="login">
+    <h3>ニックネームを入力</h3>
+    <input type="text" id="nickname" placeholder="">
+    <button id="loginBtn">ログイン</button>
+  </div>
+  <div id="controls" style="display:none;">
+    <p id="userDisplay"></p>
+    <input type="color" id="colorPicker" value="#ff0000">
+    <button id="beaconBtn">ビーコン設置</button>
+    <button id="resetBtn" style="display:none;">キャンバス初期化</button>
+    <p>残りピクセル: <span id="remaining">30</span></p>
+  </div>
+</div>
+
+<canvas id="canvas" width="2000" height="2000"></canvas>
+<canvas id="minimap" width="2000" height="2000"></canvas>
+
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/12.4.0/firebase-app.js";
+import { getDatabase, ref, get, set } from "https://www.gstatic.com/firebasejs/12.4.0/firebase-database.js";
+
+// Firebase 設定
+const firebaseConfig = {
+  apiKey: "AIzaSyB2-DwuXze6Qmjb2SzfZKrMiOhg5b6Orr4",
+  authDomain: "bigcampus-74ef9.firebaseapp.com",
+  databaseURL: "https://bigcampus-74ef9-default-rtdb.asia-southeast1.firebasedatabase.app",
+  projectId: "bigcampus-74ef9",
+  storageBucket: "bigcampus-74ef9.appspot.com",
+  messagingSenderId: "357758231025",
+  appId: "1:357758231025:web:35a46daa866e90ed8ce450"
+};
+const app = initializeApp(firebaseConfig);
+const db = getDatabase(app);
+
+// キャンバス設定
+const canvas=document.getElementById('canvas');
+const ctx=canvas.getContext('2d');
+const minimap=document.getElementById('minimap');
+const mctx=minimap.getContext('2d');
+const colorPicker=document.getElementById('colorPicker');
+const remainingEl=document.getElementById('remaining');
+const resetBtn=document.getElementById('resetBtn');
+const beaconBtn=document.getElementById('beaconBtn');
+
+const CANVAS_SIZE=2000, MIN_ZOOM=0.5, MAX_ZOOM=40;
+let user=null, remaining=30, scale=1, offsetX=0, offsetY=0;
+let dragging=false,lastX,lastY;
+let lastDist=0;
+let paintData={}, beaconData={};
+const allowedUsers=Array.from({length:10},(_,i)=>"ユーザー"+String(i+1).padStart(6,"0"));
+
+// ログイン
+async function login(name){
+  if(!allowedUsers.includes(name)){ alert("このニックネームは使用できません"); return false; }
+  const snap = await get(ref(db, 'users/'+name));
+  if(snap.exists() && snap.val().used){ alert("他の端末で使用中です"); return false; }
+  await set(ref(db,'users/'+name), {used:true});
+  localStorage.setItem('lastUser', name);
+  user=name;
+  remaining=getRemaining(user);
+  document.getElementById('login').style.display='none';
+  document.getElementById('controls').style.display='block';
+  document.getElementById('userDisplay').textContent=user;
+  if(user==="ユーザー000001") resetBtn.style.display='inline';
+  loadData();
+  drawCanvas();
+  return true;
+}
+
+// ログアウト時にフラグ解除
+window.addEventListener('beforeunload', async ()=>{
+  if(user) await set(ref(db,'users/'+user), {used:false});
+});
+
+// 残りピクセル管理
+function getRemaining(user){
+  const today=new Date().toISOString().slice(0,10);
+  return parseInt(localStorage.getItem(`remaining_${user}_${today}`))||30;
+}
+function saveRemaining(){ const today=new Date().toISOString().slice(0,10); localStorage.setItem(`remaining_${user}_${today}`,remaining); }
+
+// データ保存・読み込み
+function saveData(){ localStorage.setItem('paintData', JSON.stringify(paintData)); localStorage.setItem('beaconData', JSON.stringify(beaconData)); }
+function loadData(){ paintData=JSON.parse(localStorage.getItem('paintData')||'{}'); beaconData=JSON.parse(localStorage.getItem('beaconData')||'{}'); }
+
+// キャンバス描画
+function drawCanvas(){
+  ctx.save();
+  ctx.setTransform(scale,0,0,scale,offsetX,offsetY);
+  ctx.clearRect(-offsetX/scale,-offsetY/scale,canvas.width/scale,canvas.height/scale);
+
+  // 2b2t風背景: 土と草
+  for(let y=0;y<CANVAS_SIZE;y+=10){
+    for(let x=0;x<CANVAS_SIZE;x+=10){
+      ctx.fillStyle=(x+y)%20===0 ? "#6b4c3b" : "#7c5c3b";
+      ctx.fillRect(x,y,10,10);
+    }
+  }
+
+  // グリッド線
+  ctx.strokeStyle="#555";
+  for(let i=0;i<=CANVAS_SIZE;i+=50){ ctx.beginPath(); ctx.moveTo(i,0); ctx.lineTo(i,CANVAS_SIZE); ctx.stroke(); ctx.beginPath(); ctx.moveTo(0,i); ctx.lineTo(CANVAS_SIZE,i); ctx.stroke(); }
+
+  // ピクセル描画
+  for(let key in paintData){ const [x,y,color]=paintData[key]; ctx.fillStyle=color; ctx.fillRect(x,y,1,1); }
+
+  // ビーコン
+  if(beaconData[user]){ ctx.strokeStyle='cyan'; ctx.beginPath(); beaconData[user].forEach(([bx,by])=>{ctx.moveTo(bx-2,by);ctx.lineTo(bx+2,by);ctx.moveTo(bx,by-2);ctx.lineTo(bx,by+2);}); ctx.stroke(); }
+
+  ctx.restore();
+  drawMinimap();
+}
+
+// ミニマップ描画
+function drawMinimap(){
+  mctx.clearRect(0,0,minimap.width,minimap.height);
+  mctx.fillStyle="#000"; mctx.fillRect(0,0,minimap.width,minimap.height);
+  if(beaconData[user]){ mctx.fillStyle='cyan'; beaconData[user].forEach(([bx,by])=>{ mctx.fillRect(bx/2000*minimap.width, by/2000*minimap.height,2,2); }); }
+}
+
+// 塗る
+function paintPixel(x,y){
+  if(remaining<=0){ alert("今日はもう塗れません！"); return; }
+  const key=`${x},${y}`;
+  paintData[key]=[x,y,colorPicker.value];
+  remaining--; remainingEl.textContent=remaining;
+  saveRemaining(); saveData(); drawCanvas();
+}
+
+// 座標変換
+function screenToCanvas(x,y){ const rect=canvas.getBoundingClientRect(); return [Math.floor((x-rect.left-offsetX)/scale), Math.floor((y-rect.top-offsetY)/scale)]; }
+
+// ドラッグ移動
+function startDrag(x,y){ dragging=true; lastX=x; lastY=y; }
+function dragMove(x,y){ if(!dragging) return; offsetX+=x-lastX; offsetY+=y-lastY; lastX=x; lastY=y; drawCanvas(); }
+function endDrag(){ dragging=false; lastDist=0; }
+
+// PC・スマホイベント
+canvas.addEventListener('mousedown', e=>startDrag(e.clientX,e.clientY));
+window.addEventListener('mousemove', e=>dragMove(e.clientX,e.clientY));
+window.addEventListener('mouseup', endDrag);
+canvas.addEventListener('touchstart', e=>{
+  if(e.touches.length===1){ const t=e.touches[0]; startDrag(t.clientX,t.clientY); }
+  if(e.touches.length===2){ lastDist=Math.hypot(e.touches[0].clientX-e.touches[1].clientX, e.touches[0].clientY-e.touches[1].clientY); }
+});
+canvas.addEventListener('touchmove', e=>{
+  if(e.touches.length===1){ const t=e.touches[0]; dragMove(t.clientX,t.clientY); }
+  if(e.touches.length===2){
+    const d=Math.hypot(e.touches[0].clientX-e.touches[1].clientX, e.touches[0].clientY-e.touches[1].clientY);
+    if(lastDist>0){
+      const zoom=d/lastDist;
+      scale=Math.min(MAX_ZOOM,Math.max(MIN_ZOOM,scale*zoom));
+      drawCanvas();
+    }
+    lastDist=d;
+  }
+});
+canvas.addEventListener('touchend', endDrag);
+
+// 塗るクリック
+canvas.addEventListener('click', e=>{ const [cx,cy]=screenToCanvas(e.clientX,e.clientY); if(cx>=0&&cy>=0&&cx<CANVAS_SIZE&&cy<CANVAS_SIZE) paintPixel(cx,cy); });
+
+// マウスホイールズーム
+canvas.addEventListener('wheel', e=>{ e.preventDefault(); const zoom=e.deltaY<0?1.2:0.8; scale=Math.min(MAX_ZOOM,Math.max(MIN_ZOOM,scale*zoom)); drawCanvas(); });
+
+// ビーコン設置
+beaconBtn.addEventListener('click', e=>{
+  const [cx,cy]=screenToCanvas(window.innerWidth/2, window.innerHeight/2);
+  beaconData[user]=beaconData[user]||[]; beaconData[user].push([cx,cy]);
+  saveData(); drawCanvas(); alert("ビーコン設置完了！");
+});
+
+// 初期化
+resetBtn.addEventListener('click', ()=>{
+  if(!confirm("本当にキャンバスを初期化しますか？")) return;
+  paintData={}; beaconData={}; saveData(); drawCanvas(); alert("キャンバスをリセットしました。");
+});
+
+// ログイン
+document.getElementById('loginBtn').addEventListener('click', async ()=>{ const name=document.getElementById('nickname').value.trim(); await login(name); });
+
+// 自動ログイン
+window.addEventListener('load', async ()=>{
+  const lastUser=localStorage.getItem('lastUser');
+  if(lastUser) await login(lastUser);
+});
+
+</script>
+</body>
+</html>

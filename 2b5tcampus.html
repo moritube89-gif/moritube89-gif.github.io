@@ -1,0 +1,441 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Pixel World — Shared Canvas</title>
+<style>
+  :root{
+    --ui-bg: rgba(10,10,10,0.7);
+    --accent: #00ffd1;
+  }
+  html,body{height:100%;margin:0;background:#141212;color:#ddd;font-family:Inter,system-ui,Segoe UI,Roboto,Helvetica,Arial,sans-serif;}
+  /* top bar */
+  #topbar{position:fixed;left:12px;top:12px;z-index:60;display:flex;gap:10px;align-items:center;}
+  .panel{background:var(--ui-bg);padding:8px;border-radius:10px;box-shadow:0 6px 18px rgba(0,0,0,0.6);}
+  #userCount{font-weight:700;color:var(--accent);}
+  #colorPicker{width:44px;height:44px;border-radius:8px;border:none;cursor:pointer;padding:0;}
+  button{background:#222;border:1px solid #333;color:#fff;padding:6px 10px;border-radius:8px;cursor:pointer;}
+  button.admin{background:#7b1f1f;border-color:#a44;color:#fff;}
+  /* canvas area */
+  #wrap{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;}
+  canvas#canvas{background:#fff;image-rendering:pixelated;touch-action:none;border:4px solid #2b2b2b;border-radius:8px;box-shadow: 0 8px 30px rgba(0,0,0,0.6);}
+  /* minimap */
+  #minimap{position:fixed;right:14px;bottom:14px;z-index:60;}
+  canvas#mini{width:160px;height:160px;border:3px solid rgba(0,255,209,0.18);border-radius:8px;background:#050505;}
+  /* password overlay */
+  #pwOverlay{position:fixed;inset:0;background:linear-gradient(180deg,rgba(0,0,0,0.85),rgba(0,0,0,0.9));display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:200;}
+  #pwBox{background:var(--ui-bg);padding:20px;border-radius:12px;text-align:center;min-width:280px;}
+  input#pw{padding:10px 12px;border-radius:8px;border:none;font-size:18px;width:220px;margin-top:8px;text-align:center;}
+  #pwBtn{margin-top:10px;padding:10px 16px;border-radius:8px;background:#0a785f;color:#fff;border:none;cursor:pointer;font-weight:700;}
+  #note{margin-top:8px;font-size:12px;color:#aaa;}
+  /* small */
+  .small{font-size:13px;color:#bfbfbf;}
+</style>
+</head>
+<body>
+
+<!-- top UI -->
+<div id="topbar">
+  <div class="panel">
+    参加人数: <span id="userCount">0</span>
+  </div>
+  <div class="panel">
+    色: <input id="colorPicker" type="color" value="#ff0000" title="色を選択">
+  </div>
+  <div class="panel">
+    <button id="clearLocal">この端末のデータ削除</button>
+  </div>
+  <div class="panel">
+    <button id="adminResetBtn" class="admin" style="display:none;">管理者リセット（pixels全削除）</button>
+  </div>
+</div>
+
+<!-- canvas area -->
+<div id="wrap">
+  <canvas id="canvas" width="2000" height="2000"></canvas>
+</div>
+
+<!-- minimap -->
+<div id="minimap">
+  <canvas id="mini" width="200" height="200"></canvas>
+</div>
+
+<!-- password overlay -->
+<div id="pwOverlay">
+  <div id="pwBox">
+    <h2 style="margin:0 0 6px 0;color:var(--accent)">Enter Password</h2>
+    <input id="pw" type="password" placeholder="パスワードを入力">
+    <div>
+      <button id="pwBtn">参加する</button>
+    </div>
+    <div id="note" class="small">通常: <strong>14140809</strong> ／ 管理者: <strong>0428</strong></div>
+  </div>
+</div>
+
+<script type="module">
+/* Firebase + canvas shared app
+   - Passwords: user 14140809, admin 0428
+   - Admin button -> removes /pixels (only)
+   - active users stored in /users/{id} and removed on unload
+   - pixels stored in /pixels/{x,y} = color
+   - pinch zoom, pan, tap-to-paint (touch), click-to-paint (mouse)
+*/
+
+import { initializeApp } from "https://www.gstatic.com/firebasejs/12.4.0/firebase-app.js";
+import { getAnalytics } from "https://www.gstatic.com/firebasejs/12.4.0/firebase-analytics.js";
+import { getDatabase, ref, onValue, set, remove, update } from "https://www.gstatic.com/firebasejs/12.4.0/firebase-database.js";
+
+/* ------- Firebase config (your project) ------- */
+const firebaseConfig = {
+  apiKey: "AIzaSyB2-DwuXze6Qmjb2SzfZKrMiOhg5b6Orr4",
+  authDomain: "bigcampus-74ef9.firebaseapp.com",
+  databaseURL: "https://bigcampus-74ef9-default-rtdb.asia-southeast1.firebasedatabase.app",
+  projectId: "bigcampus-74ef9",
+  storageBucket: "bigcampus-74ef9.firebasestorage.app",
+  messagingSenderId: "357758231025",
+  appId: "1:357758231025:web:48b625abf7b6b13f8ce450",
+  measurementId: "G-JW9LP10L60"
+};
+const app = initializeApp(firebaseConfig);
+try { getAnalytics(app); } catch(e){ /* analytics may block in some envs */ }
+const db = getDatabase(app);
+
+/* ------- DOM ------- */
+const pwOverlay = document.getElementById('pwOverlay');
+const pwInput = document.getElementById('pw');
+const pwBtn = document.getElementById('pwBtn');
+const userCountEl = document.getElementById('userCount');
+const colorPicker = document.getElementById('colorPicker');
+const adminResetBtn = document.getElementById('adminResetBtn');
+const clearLocalBtn = document.getElementById('clearLocal');
+
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+const mini = document.getElementById('mini');
+const mctx = mini.getContext('2d');
+
+/* ------- Settings ------- */
+const USER_PASS = "14140809";
+const ADMIN_PASS = "0428";
+const PIXEL_PATH = 'pixels';
+const USERS_PATH = 'users';
+const CANVAS_SIZE = 2000; // logical pixel grid
+const MINI_SIZE = mini.width;
+const MIN_Z = 0.2, MAX_Z = 40;
+
+/* ------- State ------- */
+let role = null; // "user" or "admin"
+let userId = localStorage.getItem('pixelUserId') || null;
+
+let scale = 1;
+let offsetX = 0, offsetY = 0;
+let dragging = false, lastX = 0, lastY = 0;
+let lastTouchDist = 0;
+let fingerMoved = false;
+let paintingTapThreshold = 8; // px movement threshold to consider as tap
+
+let currentColor = colorPicker.value;
+let pixelsCache = {}; // local mirror of /pixels
+let usersCache = {}; // mirror of /users
+
+/* ------- Firebase refs ------- */
+const pixelsRef = ref(db, PIXEL_PATH);
+const usersRef = ref(db, USERS_PATH);
+
+/* ------- Helpers ------- */
+function canvasToLogical(x, y){
+  // screen coords -> logical pixel coords on grid
+  const rect = canvas.getBoundingClientRect();
+  const lx = Math.floor((x - rect.left - offsetX) / scale);
+  const ly = Math.floor((y - rect.top - offsetY) / scale);
+  return [lx, ly];
+}
+function logicalToMini(x, y){
+  const sx = x / CANVAS_SIZE * MINI_SIZE;
+  const sy = y / CANVAS_SIZE * MINI_SIZE;
+  return [sx, sy];
+}
+
+/* ------- Draw local view from cache ------- */
+function drawMain(){
+  // clear visible area considering transforms
+  ctx.save();
+  ctx.setTransform(1,0,0,1,0,0); // reset
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  // draw base white grid
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0,0,canvas.width,canvas.height);
+  // draw subtle 50px grid (logical)
+  ctx.strokeStyle = "#e6e6e6";
+  ctx.globalAlpha = 0.7;
+  for(let i=0;i<=CANVAS_SIZE;i+=50){
+    // draw transformed
+    ctx.beginPath();
+    ctx.moveTo(offsetX + i*scale, offsetY + 0*scale);
+    ctx.lineTo(offsetX + i*scale, offsetY + CANVAS_SIZE*scale);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(offsetX + 0*scale, offsetY + i*scale);
+    ctx.lineTo(offsetX + CANVAS_SIZE*scale, offsetY + i*scale);
+    ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+  // draw pixels
+  ctx.setTransform(scale,0,0,scale,offsetX,offsetY);
+  for(const key in pixelsCache){
+    const color = pixelsCache[key];
+    const [x,y] = key.split(',').map(Number);
+    ctx.fillStyle = color;
+    ctx.fillRect(x,y,1,1);
+  }
+  // draw border
+  ctx.setTransform(scale,0,0,scale,offsetX,offsetY);
+  ctx.strokeStyle = "#888";
+  ctx.lineWidth = 1/scale;
+  ctx.strokeRect(0,0,CANVAS_SIZE,CANVAS_SIZE);
+  ctx.restore();
+  drawMini();
+}
+
+function drawMini(){
+  // mini shows entire canvas with pixels (very small)
+  mctx.clearRect(0,0,mini.width,mini.height);
+  mctx.fillStyle = "#050505";
+  mctx.fillRect(0,0,mini.width,mini.height);
+  // pixels
+  const ratioX = mini.width / CANVAS_SIZE;
+  const ratioY = mini.height / CANVAS_SIZE;
+  for(const key in pixelsCache){
+    const color = pixelsCache[key];
+    const [x,y] = key.split(',').map(Number);
+    mctx.fillStyle = color;
+    mctx.fillRect(Math.floor(x*ratioX), Math.floor(y*ratioY), Math.max(1,Math.ceil(ratioX)), Math.max(1,Math.ceil(ratioY)));
+  }
+  // view rect (current viewport)
+  const rect = canvas.getBoundingClientRect();
+  const viewLeft = (-offsetX)/scale;
+  const viewTop = (-offsetY)/scale;
+  const viewW = rect.width/scale;
+  const viewH = rect.height/scale;
+  mctx.strokeStyle = "rgba(0,255,209,0.7)";
+  mctx.lineWidth = 2;
+  mctx.strokeRect(viewLeft/ CANVAS_SIZE * mini.width, viewTop/ CANVAS_SIZE * mini.height, viewW/ CANVAS_SIZE * mini.width, viewH/ CANVAS_SIZE * mini.height);
+}
+
+/* ------- Firebase listeners ------- */
+onValue(pixelsRef, snap => {
+  pixelsCache = snap.val() || {};
+  drawMain();
+});
+onValue(usersRef, snap => {
+  usersCache = snap.val() || {};
+  const count = Object.keys(usersCache || {}).length;
+  userCountEl.textContent = count;
+});
+
+/* ------- Paint to Firebase ------- */
+function setPixel(x,y,color){
+  if(x<0||y<0||x>=CANVAS_SIZE||y>=CANVAS_SIZE) return;
+  const key = `${x},${y}`;
+  // optimistic update cache
+  pixelsCache[key] = color;
+  drawMain();
+  // write to DB
+  set(ref(db, `${PIXEL_PATH}/${key}`), color).catch(e=>{
+    console.error('write pixel failed',e);
+  });
+}
+
+/* ------- Interaction: pan/zoom & paint ------- */
+let touchState = {startX:0, startY:0, moved:false, startTime:0};
+
+canvas.addEventListener('mousedown', e=>{
+  dragging = true;
+  lastX = e.clientX; lastY = e.clientY;
+});
+window.addEventListener('mousemove', e=>{
+  if(dragging){
+    offsetX += e.clientX - lastX;
+    offsetY += e.clientY - lastY;
+    lastX = e.clientX; lastY = e.clientY;
+    drawMain();
+  }
+});
+window.addEventListener('mouseup', e=>{
+  dragging = false;
+});
+
+// painting via click - treat click (no big move) as paint
+canvas.addEventListener('click', e=>{
+  // avoid painting if zoom/pan action happened immediately prior — but click usually is fine
+  const [lx,ly] = canvasToLogical(e.clientX, e.clientY);
+  setPixel(lx,ly,currentColor);
+});
+
+// Touch handlers: single finger drag = pan; tap (no move) = paint; pinch = zoom
+canvas.addEventListener('touchstart', e=>{
+  if(e.touches.length === 1){
+    const t = e.touches[0];
+    touchState.startX = t.clientX; touchState.startY = t.clientY;
+    touchState.moved = false;
+    touchState.startTime = Date.now();
+  } else if(e.touches.length === 2){
+    // pinch start
+    const a = e.touches[0], b = e.touches[1];
+    lastTouchDist = Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+  }
+});
+
+canvas.addEventListener('touchmove', e=>{
+  if(e.touches.length === 1){
+    const t = e.touches[0];
+    const dx = t.clientX - touchState.startX;
+    const dy = t.clientY - touchState.startY;
+    if(Math.hypot(dx,dy) > 6){
+      touchState.moved = true;
+      // pan
+      offsetX += dx;
+      offsetY += dy;
+      touchState.startX = t.clientX;
+      touchState.startY = t.clientY;
+      drawMain();
+    }
+  } else if(e.touches.length === 2){
+    e.preventDefault();
+    const a = e.touches[0], b = e.touches[1];
+    const dist = Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+    if(lastTouchDist > 0){
+      const zoomFactor = dist / lastTouchDist;
+      const newScale = Math.min(MAX_Z, Math.max(MIN_Z, scale * zoomFactor));
+      // zoom toward midpoint
+      const midX = (a.clientX + b.clientX)/2;
+      const midY = (a.clientY + b.clientY)/2;
+      // convert midpoint to logical before zoom
+      const rect = canvas.getBoundingClientRect();
+      const beforeX = (midX - rect.left - offsetX) / scale;
+      const beforeY = (midY - rect.top - offsetY) / scale;
+      // apply scale
+      scale = newScale;
+      // after scale, compute offset so that beforeX,beforeY remains under midpoint
+      offsetX = midX - rect.left - beforeX * scale;
+      offsetY = midY - rect.top - beforeY * scale;
+      drawMain();
+    }
+    lastTouchDist = dist;
+  }
+});
+
+canvas.addEventListener('touchend', e=>{
+  if(e.touches.length === 0){
+    // if it was a quick tap (not moved), paint
+    const elapsed = Date.now() - touchState.startTime;
+    if(!touchState.moved && elapsed < 300){
+      // find touchend position from changedTouches[0]
+      const t = (event.changedTouches && event.changedTouches[0]) || null;
+      if(t){
+        const [lx,ly] = canvasToLogical(t.clientX, t.clientY);
+        setPixel(lx,ly,currentColor);
+      }
+    }
+    lastTouchDist = 0;
+  } else if(e.touches.length === 1){
+    lastTouchDist = 0;
+  }
+});
+
+/* wheel zoom (desktop) */
+canvas.addEventListener('wheel', e=>{
+  e.preventDefault();
+  const rect = canvas.getBoundingClientRect();
+  const mx = e.clientX;
+  const my = e.clientY;
+  const beforeX = (mx - rect.left - offsetX) / scale;
+  const beforeY = (my - rect.top - offsetY) / scale;
+  const delta = e.deltaY < 0 ? 1.15 : 0.85;
+  scale = Math.min(MAX_Z, Math.max(MIN_Z, scale * delta));
+  offsetX = mx - rect.left - beforeX * scale;
+  offsetY = my - rect.top - beforeY * scale;
+  drawMain();
+});
+
+/* color change */
+colorPicker.addEventListener('input', e=>{ currentColor = e.target.value; });
+
+/* ------- Authentication / user registration ------- */
+function registerUserRecord(id){
+  // set /users/{id} = true (active)
+  update(ref(db, USERS_PATH), { [id]: true }).catch(e=>console.error(e));
+}
+function removeUserRecord(id){
+  remove(ref(db, `${USERS_PATH}/${id}`)).catch(e=>console.error(e));
+}
+
+pwBtn.addEventListener('click', async ()=>{
+  const val = pwInput.value.trim();
+  if(!val) return;
+  if(val === USER_PASS || val === ADMIN_PASS){
+    role = (val === ADMIN_PASS) ? 'admin' : 'user';
+    // set local storage flags
+    localStorage.setItem('pixelRole', role);
+    // user id for active tracking
+    if(!userId){
+      userId = 'u_' + Date.now() + '_' + Math.floor(Math.random()*10000);
+      localStorage.setItem('pixelUserId', userId);
+    }
+    registerUserRecord(userId);
+    if(role === 'admin') adminResetBtn.style.display = 'inline-block';
+    // hide overlay
+    pwOverlay.style.display = 'none';
+    // initial draw (in case no events yet)
+    drawMain();
+    // remove user record on unload
+    window.addEventListener('beforeunload', ()=>{ removeUserRecord(userId); });
+  } else {
+    alert('パスワードが違います');
+  }
+});
+
+/* auto-login if local */
+window.addEventListener('load', ()=>{
+  const savedRole = localStorage.getItem('pixelRole');
+  const savedId = localStorage.getItem('pixelUserId');
+  if(savedRole && savedId){
+    role = savedRole;
+    userId = savedId;
+    registerUserRecord(userId);
+    if(role === 'admin') adminResetBtn.style.display = 'inline-block';
+    pwOverlay.style.display = 'none';
+  }
+});
+
+/* admin reset action: remove /pixels entirely */
+adminResetBtn.addEventListener('click', async ()=>{
+  if(!role || role !== 'admin'){ alert('管理者権限が必要です'); return; }
+  if(!confirm('管理者：pixels を完全に削除します。よろしいですか？')) return;
+  await remove(ref(db, PIXEL_PATH));
+  // local cache will update via onValue listener
+  alert('pixels を削除しました');
+});
+
+/* clear local storage (local reset) */
+clearLocalBtn.addEventListener('click', ()=>{
+  if(confirm('この端末の自動ログイン情報とローカルキャッシュを消しますか？')){
+    localStorage.removeItem('pixelUserId');
+    localStorage.removeItem('pixelRole');
+    // also remove user record on server if currently registered
+    if(userId) removeUserRecord(userId);
+    userId = null;
+    role = null;
+    // show overlay again
+    pwOverlay.style.display = 'flex';
+    alert('消去しました。ページ再読み込み後、再ログインしてください。');
+  }
+});
+
+/* draw initial emptiness */
+drawMain();
+
+</script>
+</body>
+</html>
